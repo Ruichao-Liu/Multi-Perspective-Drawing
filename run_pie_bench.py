@@ -1,4 +1,6 @@
 from diffusers import LCMScheduler
+from markdown_it.rules_inline import image
+
 from pipeline_ead import EditPipeline
 import os
 import gradio as gr
@@ -391,8 +393,9 @@ def main():
     with open (annotation_file_name) as f:
         annotation_file = json.load(f)
     for annotation_idx , annotation  in annotation_file.items():
-        print(annotation_idx)
+
         img_path =os.path.join(root, "annotation_images",annotation["image_path"] )
+
         # if os.path.exists( os.path.join(target, "annotation_images", annotation["image_path"])):
         #     continue
         imagein = Image.open(img_path)
@@ -407,7 +410,7 @@ def main():
                 width=512, height=512, seed=0, img=imagein, strength=1,
                 cross_replace_steps=0.7, self_replace_steps=0.7, eta=1, thresh_e=0.55, thresh_m=0.6, denoise=False)
         annotation_dir = os.path.dirname(annotation["image_path"])
-
+        print("+++++++++++++++++++", annotation_dir)
         # Create the full directory path
         full_dir_path = os.path.join(target, "annotation_images", annotation_dir)
         os.makedirs(full_dir_path, exist_ok=True)
