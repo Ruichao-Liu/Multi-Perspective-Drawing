@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/InfEdit.iml" filepath="$PROJECT_DIR$/.idea/InfEdit.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/Multi-Perspective-Drawing.iml" filepath="$PROJECT_DIR$/.idea/Multi-Perspective-Drawing.iml" />
     </modules>
   </component>
 </project>

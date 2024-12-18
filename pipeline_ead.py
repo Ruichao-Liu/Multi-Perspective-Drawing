@@ -481,10 +481,10 @@ class EditPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
 
         # get latents
         clean_latents = init_latents
-        if denoise_model:
+        if denoise_model:  # DDIM
             init_latents = self.scheduler.add_noise(init_latents, noise, timestep)  # inversion
             latents = init_latents
-        else:
+        else: # DDCM
             latents = noise
 
         return latents, clean_latents
