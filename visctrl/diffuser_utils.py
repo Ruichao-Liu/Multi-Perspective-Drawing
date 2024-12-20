@@ -190,8 +190,9 @@ class VisCtrlPipeline(StableDiffusionPipeline):
         ###############
         source_latents = latents
         init_latents = [
-            self.vae.encode(image[i: i + 1]).latent_dist.sample(generator[i]) for i in range(batch_size)
-        ]
+            self.vae.encode(image[i:i+1]).latent_dist.sample() for i in range(batch_size)
+        ] # TODO没有image输入
+        clean_latents = init_latents
         ###############
         # unconditional embedding for classifier free guidance
         if guidance_scale > 1.:
@@ -265,9 +266,7 @@ class VisCtrlPipeline(StableDiffusionPipeline):
             else:
                 (source_noise_pred, noise_pred) = concat_noise_pred.chunk(2, dim=0)
 
-            noise = torch.randn(
-                latents.shape, dtype=latents.dtype, device=latents.device, generator=generator
-            )
+            noise = torch.randn( latents.shape, dtype=latents.dtype, device=latents.device)
 
 
             _, latents, pred_x0 = ddcm_sampler(
@@ -275,9 +274,9 @@ class VisCtrlPipeline(StableDiffusionPipeline):
                 latents, t,
                 source_noise_pred, noise_pred,
                 clean_latents, noise=noise,
-                eta=eta, to_next=False,
-                **extra_step_kwargs
+                eta=eta, to_next=False
             )
+        image = self.latent2image(latents, return_type="pt")
 
 
         # for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDIM Sampler")):
