@@ -364,7 +364,7 @@ def inference(source_prompt, target_prompt, positive_prompt, negative_prompt, lo
                    denoise_model=denoise,
                    callback = controller.step_callback
                    )
-
+    show_cross_attention(controller,16,["down","mid","up"],0,source_prompt)
     return results.images[0]
 
 
@@ -374,9 +374,38 @@ def replace_nsfw_images(results):
             results.images[i] = Image.open("nsfw.png")
     return results.images[0]
 
+############
+def aggregate_attention(attention_store: AttentionStore, res: int, from_where: List[str], is_cross: bool, select: int, input_image_prompt=None):
+    out = []
+    attention_maps = attention_store.get_average_attention()
+    num_pixels = res ** 2
+    # from_where表示从哪些层获取注意力矩阵
+    for location in from_where:
+        for item in attention_maps[f"{location}_{'cross' if is_cross else 'self'}"]:
+            if item.shape[1] == num_pixels:
+                cross_maps = item.reshape(len([input_image_prompt]), -1, res, res, item.shape[-1])[select]
+                out.append(cross_maps)
+    out = torch.cat(out, dim=0)
+    out = out.sum(0) / out.shape[0]
+    return out.cpu()
 
 
+def show_cross_attention(attention_store: AttentionStore, res: int, from_where: List[str], select: int = 0, input_image_prompt=None):
+    tokens = tokenizer.encode(input_image_prompt)
+    decoder = tokenizer.decode
+    attention_maps = aggregate_attention(attention_store, res, from_where, True, select,input_image_prompt)
+    images = []
+    for i in range(len(tokens)):
+        image = attention_maps[:, :, i]
+        image = 255 * image / image.max()
+        image = image.unsqueeze(-1).expand(*image.shape, 3)
+        image = image.numpy().astype(np.uint8)
+        image = np.array(Image.fromarray(image).resize((256, 256)))
+        # image = ptp_utils.text_under_image(image, decoder(int(tokens[i])))
+        images.append(image)
+    ptp_utils.view_images(np.stack(images, axis=0))
 
+#######
 
 def main():
     parser = argparse.ArgumentParser()

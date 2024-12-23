@@ -309,7 +309,7 @@ class VisCtrlPipeline(StableDiffusionPipeline):
         #     # latents_list.append(latents)
         #     # pred_x0_list.append(pred_x0)
         #
-        # image = self.latent2image(latents, return_type="pt")
+        image = self.latent2image(latents, return_type="pt")
         # # if return_intermediates:
         # #     pred_x0_list = [self.latent2image(img, return_type="pt") for img in pred_x0_list]
         # #     latents_list = [self.latent2image(img, return_type="pt") for img in latents_list]

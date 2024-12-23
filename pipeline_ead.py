@@ -6,7 +6,7 @@ import PIL
 import torch
 from packaging import version
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer
-
+from PIL import Image
 from diffusers.configuration_utils import FrozenDict
 from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
 from diffusers.loaders import LoraLoaderMixin, TextualInversionLoaderMixin
@@ -18,6 +18,8 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+
+
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -335,6 +337,19 @@ class EditPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
 
         return prompt_embeds, negative_prompt_embeds
+    # dolphin
+    @torch.no_grad()
+    def latent2image(self, latents, return_type='np'):
+        latents = 1 / 0.18215 * latents.detach()
+        image = self.vae.decode(latents)['sample']
+        if return_type == 'np':
+            image = (image / 2 + 0.5).clamp(0, 1)
+            image = image.cpu().permute(0, 2, 3, 1).numpy()[0]
+            image = (image * 255).astype(np.uint8)
+        elif return_type == "pt":
+            image = (image / 2 + 0.5).clamp(0, 1)
+
+        return image
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img.StableDiffusionImg2ImgPipeline.check_inputs
     def check_inputs(
@@ -669,8 +684,22 @@ class EditPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
                   clean_latents, noise=noise, 
                   eta=eta, to_next=False, 
                   **extra_step_kwargs
-                )
-                
+                )  # pred_x0.shpae = (batch_size, 4, 256, 256)
+                inter_image = self.latent2image(pred_x0, return_type="pt")
+                inter_image = inter_image.cpu()
+                inter_image = inter_image.numpy()
+                max_value = np.max(inter_image)
+                min_value = np.min(inter_image)
+                normalized_array = 255 * (inter_image - min_value) / (max_value - min_value)
+
+                # 转换为uint8
+                inter_image = normalized_array.astype(np.uint8)
+
+                inter_image = inter_image.transpose((0, 2, 3, 1)).squeeze()
+
+                inter_image = Image.fromarray(inter_image)
+                inter_image.save(f"results/output_{i}.png")
+
                 source_latents, mutual_latents, pred_xm = ddcm_sampler(
                   self.scheduler, source_latents, 
                   mutual_latents, t, 
