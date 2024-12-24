@@ -260,7 +260,7 @@ class VisCtrlPipeline(StableDiffusionPipeline):
                     noise_pred_text
                 ) = concat_noise_pred.chunk(4, dim=0)
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-                source_noise_pred = source_noise_pred_uncond + source_guidance_scale * (
+                source_noise_pred = source_noise_pred_uncond + guidance_scale * (
                         source_noise_pred_text - source_noise_pred_uncond
                 )
             else:
@@ -279,41 +279,41 @@ class VisCtrlPipeline(StableDiffusionPipeline):
         image = self.latent2image(latents, return_type="pt")
 
 
-        # for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDIM Sampler")):
-        #     if src_intermediate_latents is not None and  tar_intermediate_latents is not None:
-        #         # note that the batch_size >= 2
-        #         src_latents = src_intermediate_latents[-1 - i]
-        #         tar_latents = tar_intermediate_latents[-1 - i]
-        #         latents_src = latents[1:2]
-        #         latents_tar = latents[-1:]
-        #         # latents_tar = latents[-1:] * 0.5 + tar_latents * 0.5
-        #
-        #         # latents = torch.cat([src_latents,latents_src, tar_latents, latents_tar])
-        #         latents = torch.cat([src_latents, latents_src, tar_latents, latents_tar])
-        #
-        #     if guidance_scale > 1.:
-        #         model_inputs = torch.cat([latents]*2)
-        #     else:
-        #         model_inputs = latents
-        #     if unconditioning is not None and isinstance(unconditioning, list):
-        #         _, text_embeddings = text_embeddings.chunk(2)
-        #         text_embeddings = torch.cat([unconditioning[i].expand(*text_embeddings.shape), text_embeddings])
-        #     # predict tghe noise
-        #     # text_embeddings =[4,77,468]= [uncond,uncond,src,tar]     model_inputs=[4,4,64,64]
-        #     noise_pred = self.unet(model_inputs, t, encoder_hidden_states=text_embeddings).sample
-        #     if guidance_scale > 1.:
-        #         noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
-        #         noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
-        #     # compute the previous noise sample x_t -> x_t-1
-        #     latents, pred_x0 = self.step(noise_pred, t, latents)
-        #     # latents_list.append(latents)
-        #     # pred_x0_list.append(pred_x0)
-        #
+        for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDIM Sampler")):
+            if src_intermediate_latents is not None and  tar_intermediate_latents is not None:
+                # note that the batch_size >= 2
+                src_latents = src_intermediate_latents[-1 - i]
+                tar_latents = tar_intermediate_latents[-1 - i]
+                latents_src = latents[1:2]
+                latents_tar = latents[-1:]
+                # latents_tar = latents[-1:] * 0.5 + tar_latents * 0.5
+
+                # latents = torch.cat([src_latents,latents_src, tar_latents, latents_tar])
+                latents = torch.cat([src_latents, latents_src, tar_latents, latents_tar])
+
+            if guidance_scale > 1.:
+                model_inputs = torch.cat([latents]*2)
+            else:
+                model_inputs = latents
+            if unconditioning is not None and isinstance(unconditioning, list):
+                _, text_embeddings = text_embeddings.chunk(2)
+                text_embeddings = torch.cat([unconditioning[i].expand(*text_embeddings.shape), text_embeddings])
+            # predict tghe noise
+            # text_embeddings =[4,77,468]= [uncond,uncond,src,tar]     model_inputs=[4,4,64,64]
+            noise_pred = self.unet(model_inputs, t, encoder_hidden_states=text_embeddings).sample
+            if guidance_scale > 1.:
+                noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
+                noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
+            # compute the previous noise sample x_t -> x_t-1
+            latents, pred_x0 = self.step(noise_pred, t, latents)
+            # latents_list.append(latents)
+            # pred_x0_list.append(pred_x0)
+
         image = self.latent2image(latents, return_type="pt")
-        # # if return_intermediates:
-        # #     pred_x0_list = [self.latent2image(img, return_type="pt") for img in pred_x0_list]
-        # #     latents_list = [self.latent2image(img, return_type="pt") for img in latents_list]
-        # #     return image, pred_x0_list, latents_list
+        # if return_intermediates:
+        #     pred_x0_list = [self.latent2image(img, return_type="pt") for img in pred_x0_list]
+        #     latents_list = [self.latent2image(img, return_type="pt") for img in latents_list]
+        #     return image, pred_x0_list, latents_list
         return image
 
     @torch.no_grad()

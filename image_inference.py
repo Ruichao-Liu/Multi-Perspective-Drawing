@@ -177,7 +177,7 @@ def sam_img(img_path, input_box, save_path):
     img = cv2.imread(img_path)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     predictor.set_image(img)
-
+    # 使用bbox引导分割
     masks, _, _ = predictor.predict(point_coords=None, point_labels=None, box=input_box[None, :],
                                     multimask_output=False)
     mask_gray = np.where(masks, 255, 0).astype(np.uint8)
@@ -202,7 +202,7 @@ def lang_sam_img(img_path, prompt, save_path):
 
 seed = 42
 seed_everything(seed)
-sam = sam_model_registry["vit_h"](checkpoint="/workspace/hf_data/sam/sam_vit_h_4b8939.pth")
+sam = sam_model_registry["vit_h"](checkpoint="checkpoint/sam_vit_h_4b8939.pth")
 sam.to(device='cuda:0')
 predictor = SamPredictor(sam)
 
@@ -215,7 +215,7 @@ def vis_ctrl(tar_img_path, src_img_path, injection_count,
              src_prompt, tar_prompt,save_path=None):
 
     first_flag = True
-    for inj_num in range(injection_count):  # 论文创新迭代
+    for inj_num in range(injection_count):
         if first_flag:
             attention_injection(tar_img_path=tar_img_path, src_img_path=src_img_path, g_scale=6, num_step=10, step=2, layer=1,
                                 injection_count=inj_num, src_prompt=src_prompt, tar_prompt=tar_prompt,save_path=save_path)
@@ -230,16 +230,17 @@ def vis_ctrl(tar_img_path, src_img_path, injection_count,
 def attention_injection(tar_img_path, src_img_path, g_scale, num_step, step, layer, injection_count,
                         src_prompt, tar_prompt, save_path=None):
 
-    torch.cuda.set_device(3)  # set the GPU device
-    model_path = "/workspace/hf_data/stable-diffusion-v1-5"
+    torch.cuda.set_device(0)  # set the GPU device
+    model_path = "runwayml/stable-diffusion-v1-5"
+    # model_path = "/workspace/hf_data/stable-diffusion-v1-5"
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False,
                               set_alpha_to_one=False)
     model = VisCtrlPipeline.from_pretrained(model_path, scheduler=scheduler).to(device)
 
     global first_flag
-    if first_flag: # 不迭代
+    if first_flag:
         tar_img_path = tar_img_path
-    else: # 迭代
+    else:
         tar_img_path = save_path
     # target image
     tar_image = load_image(tar_img_path, device)
@@ -262,7 +263,7 @@ def attention_injection(tar_img_path, src_img_path, g_scale, num_step, step, lay
                                                     num_inference_steps=num_step,
                                                     return_intermediates=True)
 
-    editor = SelfAttentionControl(step, layer) # ！！！
+    editor = SelfAttentionControl(step, layer)
     regiter_attention_editor_diffusers(model, editor)
 
     prompts = [source_prompt, source_prompt, target_prompt, target_prompt]
@@ -292,9 +293,9 @@ def getArg():
     parser.add_argument('--iteration_num', type=int, required=True)
 
     parser.add_argument('--tar_img_path', type=str, required=True)
-    parser.add_argument('--tar_img_mask_path', type=str, required=True)
+    parser.add_argument('--tar_img_mask_path', type=str, required=True)  # 保存路径
     parser.add_argument('--ref_img_path', type=str, required=True)
-    parser.add_argument('--ref_img_mask_path', type=str, required=True)
+    parser.add_argument('--ref_img_mask_path', type=str, required=True)  # 保存路径
 
     return parser.parse_args()
 
@@ -315,11 +316,15 @@ is_crop_img = True
 gen_img_path = args.tar_img_path
 gen_mask_path = args.tar_img_mask_path
 
-gen_box_path = args.tar_img_mask_path + './tar_img_box.json'
+# gen_box_path = args.tar_img_mask_path + './tar_img_box.json'
+mask_dir = os.path.dirname(args.tar_img_mask_path)
+gen_box_path = os.path.join(mask_dir, 'tar_img_box.json')
 sam_img(gen_img_path, gen_box(gen_box_path), gen_mask_path)
 
 
-crop_gen_path = args.tar_img_path + './tar_img_cropped.jpg'
+# crop_gen_path = args.tar_img_path + './tar_img_cropped.jpg'
+tar_dir = os.path.dirname(args.tar_img_path)
+crop_gen_path = os.path.join(mask_dir, 'tar_img_cropped.jpg')
 mask_gen_img(gen_img_path, gen_mask_path, crop_gen_path)
 print('crop tar img done!')
 
@@ -331,30 +336,32 @@ print('crop tar img done!')
 raw_ref_img_path = args.ref_img_path
 ref_mask_path = args.ref_img_mask_path
 
-ref_box_path = args.ref_img_mask_path + './ref_img_box.json'
+# ref_box_path = args.ref_img_mask_path + './ref_img_box.json'
+ref_mask_dir = os.path.dirname(args.ref_img_mask_path)
+ref_box_path = os.path.join(ref_mask_dir, 'tar_img_box.json')
 sam_img(gen_img_path, gen_box(gen_box_path), gen_mask_path)
 
 # if is_crop_img:
 #     lang_sam_img(raw_ref_img_path,ref_prompt,ref_mask_path)
 
-crop_img_path = args.ref_img_path + './ref_img_cropped.jpg'
-
+# crop_img_path = args.ref_img_path + './ref_img_cropped.jpg'
+ref_dir = os.path.dirname(args.ref_img_path)
+crop_img_path = os.path.join(ref_dir, 'ref_img_cropped.jpg')
 mask_gen_img(raw_ref_img_path, ref_mask_path, crop_img_path, kernel_size=2)
 print('crop ref img done!')
 
 # ************************************************************
 # VisCtrl
 # ************************************************************
-gen_new_img_path = "./tar_cropped_new.jpg"
+gen_new_img_path = "tar_cropped_new.jpg"
 vis_ctrl(crop_gen_path, crop_img_path,vis_ctrl_it_num,ref_prompt,tar_prompt,save_path=gen_new_img_path)
-gen_img = cv2.imread(gen_new_img_path) # 生成图像
+gen_img = cv2.imread(gen_new_img_path)
 
 tar_src_img = cv2.imread(gen_img_path)
-
-gen_new = cv2.resize(gen_img, tar_src_img.shape)
+gen_new = cv2.resize(gen_img, (tar_src_img.shape[1], tar_src_img.shape[0]))
 cv2.imwrite(gen_new_img_path, gen_new)
 # inpainting back to raw img
-new_gen_mask_path = "./tar_cropped_new_mask.jpg"
+new_gen_mask_path = "tar_cropped_new_mask.jpg"
 print('VisCtrl done!')
 
 # ***********************************************************
@@ -397,7 +404,8 @@ old_gen_img_bg = cv2.bitwise_and(raw_img, raw_img, mask=mask_inv)
 new_gen_img_fg = cv2.bitwise_and(tmp_img, tmp_img, mask=mask)
 merged_img = cv2.add(old_gen_img_bg, new_gen_img_fg)
 
-cv2.imwrite('./res/tar_new.jpg', merged_img)
-cv2.imwrite('./res/tar_new_mask.jpg', mask)
+cv2.imwrite('temp/tar_new.jpg', merged_img)
+cv2.imwrite('temp/tar_new_mask.jpg', mask)
 print('all done!')
 
+# python image_inference.py --tar_prompt "A photo of a cow" --ref_prompt "A photo of a cow" --iteration_num 2 --tar_img_path dataset/ref_img.png--tar_img_mask_path dataset/raw_mask.png --ref_img_path dataset/ref_img.png--ref_img_mask_path dataset/ref_mask.png
