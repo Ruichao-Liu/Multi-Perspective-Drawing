@@ -1,11 +1,15 @@
 import argparse
 import json
 import os
+from typing import List
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers import DDIMScheduler
 
+from visctrl import ptp_utils
+from visctrl.attention_control import AttentionStore
 from visctrl.diffuser_utils import VisCtrlPipeline
 from visctrl.visctrl_utils import AttentionBase, regiter_attention_editor_diffusers
 
@@ -20,6 +24,8 @@ from segment_anything import SamPredictor, sam_model_registry
 import torch
 import cv2
 from PIL import Image
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 def load_image_device(image_path, device):
     image = read_image(image_path)
@@ -226,13 +232,42 @@ def vis_ctrl(tar_img_path, src_img_path, injection_count,
 
     print('vis ctrl done!')
 
+##############
+def aggregate_attention(attention_store: SelfAttentionControl, res: int, from_where: List[str], is_cross: bool, select: int, input_image_prompt: str):
+    out = []
+    attention_maps = attention_store.get_average_attention()
+    num_pixels = res ** 2
+    # from_where表示从哪些层获取注意力矩阵
+    for location in from_where:
+        for item in attention_maps[f"{location}_{'cross' if is_cross else 'self'}"]:
+            if item.shape[1] == num_pixels:
+                cross_maps = item.reshape(len([input_image_prompt]), -1, res, res, item.shape[-1])[select]
+                out.append(cross_maps)
+    out = torch.cat(out, dim=0)
+    out = out.sum(0) / out.shape[0]
+    return out.cpu()
+
+def show_cross_attention(model, attention_store: SelfAttentionControl, res: int, from_where: List[str], select: int = 0, input_image_prompt: str=None):
+    tokens = model.tokenizer.encode(input_image_prompt)
+    decoder = model.tokenizer.decode
+    attention_maps = aggregate_attention(attention_store, res, from_where, True, select, input_image_prompt)
+    images = []
+    for i in range(len(tokens)):
+        image = attention_maps[:, :, i]
+        image = 255 * image / image.max()
+        image = image.unsqueeze(-1).expand(*image.shape, 3)
+        image = image.numpy().astype(np.uint8)
+        image = np.array(Image.fromarray(image).resize((256, 256)))
+        # image = ptp_utils.text_under_image(image, decoder(int(tokens[i])))
+        images.append(image)
+    ptp_utils.view_images(np.stack(images, axis=0))
+##############
 
 def attention_injection(tar_img_path, src_img_path, g_scale, num_step, step, layer, injection_count,
                         src_prompt, tar_prompt, save_path=None):
 
     torch.cuda.set_device(0)  # set the GPU device
     model_path = "runwayml/stable-diffusion-v1-5"
-    # model_path = "/workspace/hf_data/stable-diffusion-v1-5"
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False,
                               set_alpha_to_one=False)
     model = VisCtrlPipeline.from_pretrained(model_path, scheduler=scheduler).to(device)
@@ -263,20 +298,23 @@ def attention_injection(tar_img_path, src_img_path, g_scale, num_step, step, lay
                                                     num_inference_steps=num_step,
                                                     return_intermediates=True)
 
-    editor = SelfAttentionControl(step, layer)
-    regiter_attention_editor_diffusers(model, editor)
+    # editor = SelfAttentionControl(step, layer)
+    # regiter_attention_editor_diffusers(model, editor)
+    controller = AttentionStore()
+    ptp_utils.register_attention_control(model, controller)
 
     prompts = [source_prompt, source_prompt, target_prompt, target_prompt]
     start_code = torch.cat([start_code_src, start_code_src, start_code_tar, start_code_tar])
 
     image_masactrl = model(prompts,
+                           tar_image,
                            latents=start_code,
                            guidance_scale=g_scale,
                            tar_intermediate_latents=latents_list_tar,
                            src_intermediate_latents=latents_list_src,
-                           num_inference_steps=num_step,
+                           num_inference_steps=num_step
                            )
-
+    show_cross_attention(model, controller, 16, ["up", "down"], select=0, input_image_prompt=source_prompt)
     # save the synthesized image
     out_image = torch.cat([image_masactrl[0:1],
                            image_masactrl[2:3],
