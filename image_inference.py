@@ -233,7 +233,7 @@ def vis_ctrl(tar_img_path, src_img_path, injection_count,
     print('vis ctrl done!')
 
 ##############
-def aggregate_attention(attention_store: SelfAttentionControl, res: int, from_where: List[str], is_cross: bool, select: int, input_image_prompt: str):
+def aggregate_attention(attention_store: AttentionStore, res: int, from_where: List[str], is_cross: bool, select: int, input_image_prompt: str):
     out = []
     attention_maps = attention_store.get_average_attention()
     num_pixels = res ** 2
@@ -247,7 +247,7 @@ def aggregate_attention(attention_store: SelfAttentionControl, res: int, from_wh
     out = out.sum(0) / out.shape[0]
     return out.cpu()
 
-def show_cross_attention(model, attention_store: SelfAttentionControl, res: int, from_where: List[str], select: int = 0, input_image_prompt: str=None):
+def show_cross_attention(model, attention_store: AttentionStore, res: int, from_where: List[str], select: int = 0, input_image_prompt: str=None):
     tokens = model.tokenizer.encode(input_image_prompt)
     decoder = model.tokenizer.decode
     attention_maps = aggregate_attention(attention_store, res, from_where, True, select, input_image_prompt)
@@ -446,4 +446,4 @@ cv2.imwrite('temp/tar_new.jpg', merged_img)
 cv2.imwrite('temp/tar_new_mask.jpg', mask)
 print('all done!')
 
-# python image_inference.py --tar_prompt "A photo of a cow" --ref_prompt "A photo of a cow" --iteration_num 2 --tar_img_path dataset/ref_img.png--tar_img_mask_path dataset/raw_mask.png --ref_img_path dataset/ref_img.png--ref_img_mask_path dataset/ref_mask.png
+# python image_inference.py --tar_prompt "A woman in a white T." --ref_prompt "A woman in a black T." --iteration_num 2 --tar_img_path ../dataset/train/image/00000_00.jpg --tar_img_mask_path ../dataset/train/agnostic-v3.2/00000_00.jpg --ref_img_path ../dataset/train/cloth/00001_00.jpg --ref_img_mask_path ../dataset/train/cloth-mask/00001_00.jpg
