@@ -30,7 +30,7 @@ class SelfAttentionControl(AttentionBase):
         self.step_idx = step_idx if step_idx is not None else list(range(start_step, total_steps))
         print("VisCtrl at denoising steps: ", self.step_idx)
         print("VisCtrl at U-Net layers: ", self.layer_idx)
-
+        self.time_step_attention = {}  # 存储每个时间步的注意力信息
 
     def attn_batch(self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads, **kwargs):
         """
@@ -85,5 +85,19 @@ class SelfAttentionControl(AttentionBase):
         #                         num_heads, **kwargs)
         # out = torch.cat([out_u, out_c], dim=0)
 
+        key = f"step_{self.cur_step}_layer_{self.cur_att_layer}"
+        if key not in self.time_step_attention:
+            self.time_step_attention[key] = []
+        self.time_step_attention[key].append(attn.clone().detach())  # 记录副本
+
         return out
 
+    def get_average_attention(self):
+        """
+        获取所有时间步的平均注意力图
+        """
+        average_attention = {}
+        for key, attention_list in self.time_step_attention.items():
+            # 计算当前 key 下的注意力图的平均值
+            average_attention[key] = [item / self.cur_step for item in attention_list]
+        return average_attention

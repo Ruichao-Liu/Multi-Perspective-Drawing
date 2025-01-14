@@ -17,49 +17,6 @@ from torchvision.io import read_image
 from diffusers import StableDiffusionPipeline
 from pytorch_lightning import seed_everything
 
-def ddcm_sampler(scheduler, x_s, x_t, timestep, e_s, e_t, x_0, noise, eta, to_next=True):
-    if scheduler.num_inference_steps is None:
-        raise ValueError(
-            "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
-        )
-
-    if scheduler.step_index is None:
-        scheduler._init_step_index(timestep)
-
-    prev_step_index = scheduler.step_index + 1
-    if prev_step_index < len(scheduler.timesteps):
-        prev_timestep = scheduler.timesteps[prev_step_index]
-    else:
-        prev_timestep = timestep
-
-    alpha_prod_t = scheduler.alphas_cumprod[timestep]
-    alpha_prod_t_prev = (
-        scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else scheduler.final_alpha_cumprod
-    )
-    beta_prod_t = 1 - alpha_prod_t
-    beta_prod_t_prev = 1 - alpha_prod_t_prev
-    variance = beta_prod_t_prev
-    std_dev_t = eta * variance
-    noise = std_dev_t ** (0.5) * noise
-
-    e_c = (x_s - alpha_prod_t ** (0.5) * x_0) / (1 - alpha_prod_t) ** (0.5)
-
-    pred_x0 = x_0 + ((x_t - x_s) - beta_prod_t ** (0.5) * (e_t - e_s)) / alpha_prod_t ** (0.5)
-    eps = (e_t - e_s) + e_c
-    dir_xt = (beta_prod_t_prev - std_dev_t) ** (0.5) * eps
-
-    # Noise is not used for one-step sampling.
-    if len(scheduler.timesteps) > 1:
-        prev_xt = alpha_prod_t_prev ** (0.5) * pred_x0 + dir_xt + noise
-        prev_xs = alpha_prod_t_prev ** (0.5) * x_0 + dir_xt + noise
-    else:
-        prev_xt = pred_x0
-        prev_xs = x_0
-
-    if to_next:
-        scheduler._step_index += 1
-    return prev_xs, prev_xt, pred_x0  # 更新后的xs、xt、x0
-
 
 class VisCtrlPipeline(StableDiffusionPipeline):
 
@@ -86,6 +43,7 @@ class VisCtrlPipeline(StableDiffusionPipeline):
         x_next = alpha_prod_t_next**0.5 * pred_x0 + pred_dir
         return x_next, pred_x0
 
+    # raw of VisCtrlPipeline
     def step(
         self,
         model_output: torch.FloatTensor,
@@ -105,6 +63,38 @@ class VisCtrlPipeline(StableDiffusionPipeline):
         pred_dir = (1 - alpha_prod_t_prev)**0.5 * model_output
         x_prev = alpha_prod_t_prev**0.5 * pred_x0 + pred_dir
         return x_prev, pred_x0
+
+    def ddcm_sampler(
+            self, x_s, x_t, timestep, e_s, e_t, x_0, noise, eta
+    ):
+        prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
+        alpha_prod_t_prev = self.scheduler.alphas_cumprod[
+            prev_timestep] if prev_timestep > 0 else self.scheduler.final_alpha_cumprod
+        # 计算相关的beta项
+        beta_prod_t = 1 - alpha_prod_t
+        beta_prod_t_prev = 1 - alpha_prod_t_prev
+        variance = beta_prod_t_prev
+        std_dev_t = eta * variance
+        noise = std_dev_t ** (0.5) * noise
+
+        # 计算e_c（误差修正项）
+        e_c = (x_s - alpha_prod_t ** (0.5) * x_0) / (1 - alpha_prod_t) ** (0.5)
+
+        # 预测x_0
+        pred_x0 = x_0 + ((x_t - x_s) - beta_prod_t ** (0.5) * (e_t - e_s)) / alpha_prod_t ** (0.5)
+
+        # 计算eps
+        eps = (e_t - e_s) + e_c
+        dir_xt = (beta_prod_t_prev - std_dev_t) ** (0.5) * eps
+
+        # 如果是多步采样，进行噪声加入
+
+        prev_xt = alpha_prod_t_prev ** (0.5) * pred_x0 + dir_xt + noise
+        prev_xs = alpha_prod_t_prev ** (0.5) * x_0 + dir_xt + noise
+
+
+        return prev_xs, prev_xt, pred_x0
 
     @torch.no_grad()
     def image2latent(self, image):
@@ -131,16 +121,19 @@ class VisCtrlPipeline(StableDiffusionPipeline):
 
         return image
 
+
     def latent2image_grad(self, latents):
         latents = 1 / 0.18215 * latents
         image = self.vae.decode(latents)['sample']
 
         return image  # range [-1, 1]
 
+
     @torch.no_grad()
     def __call__(
         self,
         prompt,
+        tar_image,
         batch_size=1,
         height=512,
         width=512,
@@ -188,11 +181,12 @@ class VisCtrlPipeline(StableDiffusionPipeline):
             assert latents.shape == latents_shape, f"The shape of input latent tensor {latents.shape} should equal to predefined one."
 
         ###############
-        source_latents = latents
-        init_latents = [
-            self.vae.encode(image[i:i+1]).latent_dist.sample() for i in range(batch_size)
-        ] # TODO没有image输入
-        clean_latents = init_latents
+        clean_latents = self.image2latent(tar_image)
+        # source_latents = latents
+        # init_latents = [
+        #     self.vae.encode(image[i:i+1]).latent_dist.sample() for i in range(batch_size)
+        # ] # TODO没有image输入
+        # clean_latents = init_latents
         ###############
         # unconditional embedding for classifier free guidance
         if guidance_scale > 1.:
@@ -216,104 +210,117 @@ class VisCtrlPipeline(StableDiffusionPipeline):
         print("latents shape: ", latents.shape)
         # iterative sampling
         self.scheduler.set_timesteps(num_inference_steps)
-        # print("Valid timesteps: ", reversed(self.scheduler.timesteps))
 
         latents_list = [latents]
         pred_x0_list = [latents]
         # TODO
 
-        for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDCM")):
-            latent_model_input = torch.cat([latents] * 2) if guidance_scale else latents
-            source_latent_model_input = (
-                torch.cat([source_latents] * 2) if guidance_scale else source_latents
+        # for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDCM")):
+        #     latent_model_input = torch.cat([latents] * 2) if guidance_scale else latents
+        #     source_latent_model_input = (
+        #         torch.cat([source_latents] * 2) if guidance_scale else source_latents
+        #     )
+        #
+        #     latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+        #     source_latent_model_input = self.scheduler.scale_model_input(source_latent_model_input, t)
+        #
+        #     if guidance_scale:
+        #         concat_latent_model_input = torch.stack(
+        #             [
+        #                 source_latent_model_input[0],
+        #                 latent_model_input[0],
+        #                 source_latent_model_input[1],
+        #                 latent_model_input[1]
+        #             ],
+        #             dim=0,
+        #         )
+        #     else:
+        #         concat_latent_model_input = torch.cat(
+        #             [
+        #                 source_latent_model_input,
+        #                 latent_model_input
+        #             ],
+        #             dim=0,
+        #         )
+        #
+        #     concat_noise_pred = self.unet(concat_latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+        #
+        #     if guidance_scale:
+        #         (
+        #             source_noise_pred_uncond,
+        #             noise_pred_uncond,
+        #             source_noise_pred_text,
+        #             noise_pred_text
+        #         ) = concat_noise_pred.chunk(4, dim=0)
+        #         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+        #         source_noise_pred = source_noise_pred_uncond + guidance_scale * (
+        #                 source_noise_pred_text - source_noise_pred_uncond
+        #         )
+        #     else:
+        #         (source_noise_pred, noise_pred) = concat_noise_pred.chunk(2, dim=0)
+        #
+        #     noise = torch.randn( latents.shape, dtype=latents.dtype, device=latents.device)
+        #
+        #
+        #     _, latents, pred_x0 = ddcm_sampler(
+        #         self.scheduler, source_latents,
+        #         latents, t,
+        #         source_noise_pred, noise_pred,
+        #         clean_latents, noise=noise,
+        #         eta=eta, to_next=False
+        #     )
+        # image = self.latent2image(latents, return_type="pt")
+
+
+        for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDIM Sampler")):
+            if src_intermediate_latents is not None and  tar_intermediate_latents is not None:
+                # note that the batch_size >= 2
+                src_latents = src_intermediate_latents[-1 - i]
+                tar_latents = tar_intermediate_latents[-1 - i]
+                latents_src = latents[1:2]
+                latents_tar = latents[-1:]
+                # latents_tar = latents[-1:] * 0.5 + tar_latents * 0.5
+
+                # latents = torch.cat([src_latents,latents_src, tar_latents, latents_tar])
+                latents = torch.cat([src_latents, latents_src, tar_latents, latents_tar])
+
+            if guidance_scale > 1.:
+                model_inputs = torch.cat([latents]*2)
+            else:
+                model_inputs = latents
+            if unconditioning is not None and isinstance(unconditioning, list):
+                _, text_embeddings = text_embeddings.chunk(2)
+                text_embeddings = torch.cat([unconditioning[i].expand(*text_embeddings.shape), text_embeddings])
+            # predict tghe noise
+            # text_embeddings =[4,77,468]= [uncond,uncond,src,tar]     model_inputs=[4,4,64,64]
+            noise_pred = self.unet(model_inputs, t, encoder_hidden_states=text_embeddings).sample
+            if guidance_scale > 1.:
+                noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
+                noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
+            # compute the previous noise sample x_t -> x_t-1
+            # latents, pred_x0 = self.step(noise_pred, t, latents)  # maybe TODO
+            ###########################
+            source_latents = latents
+            noise = torch.randn(
+                latents.shape, dtype=latents.dtype, device=latents.device
             )
-
-            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-            source_latent_model_input = self.scheduler.scale_model_input(source_latent_model_input, t)
-
-            if guidance_scale:
-                concat_latent_model_input = torch.stack(
-                    [
-                        source_latent_model_input[0],
-                        latent_model_input[0],
-                        source_latent_model_input[1],
-                        latent_model_input[1]
-                    ],
-                    dim=0,
-                )
-            else:
-                concat_latent_model_input = torch.cat(
-                    [
-                        source_latent_model_input,
-                        latent_model_input
-                    ],
-                    dim=0,
-                )
-
-            concat_noise_pred = self.unet(concat_latent_model_input, t, encoder_hidden_states=text_embeddings).sample
-
-            if guidance_scale:
-                (
-                    source_noise_pred_uncond,
-                    noise_pred_uncond,
-                    source_noise_pred_text,
-                    noise_pred_text
-                ) = concat_noise_pred.chunk(4, dim=0)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-                source_noise_pred = source_noise_pred_uncond + source_guidance_scale * (
-                        source_noise_pred_text - source_noise_pred_uncond
-                )
-            else:
-                (source_noise_pred, noise_pred) = concat_noise_pred.chunk(2, dim=0)
-
-            noise = torch.randn( latents.shape, dtype=latents.dtype, device=latents.device)
-
-
-            _, latents, pred_x0 = ddcm_sampler(
-                self.scheduler, source_latents,
+            source_noise_pred = noise_pred
+            _, latents, pred_x0 = self.ddcm_sampler(
+                source_latents,
                 latents, t,
                 source_noise_pred, noise_pred,
                 clean_latents, noise=noise,
-                eta=eta, to_next=False
+                eta=eta
             )
+            ###########################
+            # latents_list.append(latents)
+            # pred_x0_list.append(pred_x0)
+
         image = self.latent2image(latents, return_type="pt")
-
-
-        # for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDIM Sampler")):
-        #     if src_intermediate_latents is not None and  tar_intermediate_latents is not None:
-        #         # note that the batch_size >= 2
-        #         src_latents = src_intermediate_latents[-1 - i]
-        #         tar_latents = tar_intermediate_latents[-1 - i]
-        #         latents_src = latents[1:2]
-        #         latents_tar = latents[-1:]
-        #         # latents_tar = latents[-1:] * 0.5 + tar_latents * 0.5
-        #
-        #         # latents = torch.cat([src_latents,latents_src, tar_latents, latents_tar])
-        #         latents = torch.cat([src_latents, latents_src, tar_latents, latents_tar])
-        #
-        #     if guidance_scale > 1.:
-        #         model_inputs = torch.cat([latents]*2)
-        #     else:
-        #         model_inputs = latents
-        #     if unconditioning is not None and isinstance(unconditioning, list):
-        #         _, text_embeddings = text_embeddings.chunk(2)
-        #         text_embeddings = torch.cat([unconditioning[i].expand(*text_embeddings.shape), text_embeddings])
-        #     # predict tghe noise
-        #     # text_embeddings =[4,77,468]= [uncond,uncond,src,tar]     model_inputs=[4,4,64,64]
-        #     noise_pred = self.unet(model_inputs, t, encoder_hidden_states=text_embeddings).sample
-        #     if guidance_scale > 1.:
-        #         noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
-        #         noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
-        #     # compute the previous noise sample x_t -> x_t-1
-        #     latents, pred_x0 = self.step(noise_pred, t, latents)
-        #     # latents_list.append(latents)
-        #     # pred_x0_list.append(pred_x0)
-        #
-        # image = self.latent2image(latents, return_type="pt")
-        # # if return_intermediates:
-        # #     pred_x0_list = [self.latent2image(img, return_type="pt") for img in pred_x0_list]
-        # #     latents_list = [self.latent2image(img, return_type="pt") for img in latents_list]
-        # #     return image, pred_x0_list, latents_list
+        # if return_intermediates:
+        #     pred_x0_list = [self.latent2image(img, return_type="pt") for img in pred_x0_list]
+        #     latents_list = [self.latent2image(img, return_type="pt") for img in latents_list]
+        #     return image, pred_x0_list, latents_list
         return image
 
     @torch.no_grad()

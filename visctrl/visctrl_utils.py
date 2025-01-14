@@ -137,7 +137,7 @@ def regiter_attention_editor_diffusers(model, editor: AttentionBase):
 
             # the only difference   out = [4,4096,320]
             out = editor(
-                q, k, v, sim, attn,is_cross, place_in_unet,
+                q, k, v, sim, attn, is_cross, place_in_unet,
                 self.heads, scale=self.scale, attn_o=None)
 
             return to_out(out)

@@ -1,16 +1,4 @@
 {
-    "214000000000.jpg": {
-        "image_path": "214000000000.jpg",
-        "original_prompt": "A painting of a waterfall in the mountains",
-        "editing_prompt": "A painting of a waterfall and angels in the mountains",
-        "blended_word": ""
-    },
-    "droplet.png": {
-        "image_path": "droplet.png",
-        "original_prompt": "A blue droplet emoji with a smiling face with yellow dot",
-        "editing_prompt": "A red fire emoji with a angry face with yellow dot",
-        "blended_word": ""
-    },
     "miku.png": {
         "image_path": "miku.png",
         "original_prompt": "A cartoon girl with blue hair",
